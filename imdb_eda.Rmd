@@ -1,0 +1,355 @@
+---
+title: "Stats 101C Final Project"
+author: "Valentino Aceves"
+date: "2023-11-30"
+output: pdf_document
+---
+
+```{r, message=FALSE}
+library(tidyverse)
+library(tm)
+library(SnowballC)
+library(wordcloud)
+library(textstem)
+library(factoextra)
+library(slam)
+```
+
+# Prepreprocessing
+
+```{r}
+imdb <- read.csv("IMDB Dataset.csv")
+positive_dict <- as.character(unlist(read.table("positive-words.txt")))
+negative_dict <- as.character(unlist(read.table("negative-words.txt")))
+```
+
+## Word Prepping
+
+```{r}
+clean <- imdb[, 1] %>%
+  removeWords("br") %>%
+  tolower() %>%
+  removeWords(stopwords("english")) %>%
+  removePunctuation() %>% 
+  removeNumbers() %>%
+  strsplit(" ") %>%
+  lapply(lemmatize_words) %>%
+  lapply(paste, collapse = " ") %>%
+  unlist()
+```
+
+## Word prepping with only sentiment words
+
+```{r}
+dict <- imdb[, 1] %>% 
+  removeWords("br") %>%
+  tolower() %>%
+  removePunctuation() %>%
+  removeNumbers() %>%
+  strsplit(" ") %>%
+  lapply(function(dict) 
+    dict[dict %in% c(positive_dict, negative_dict)]) %>%
+  lapply(paste, collapse = " ") %>%
+  unlist()
+dict[1:3]
+```
+
+# Preprocessing 
+
+## Document term matrix (bow)
+
+```{r}
+bow <- clean %>%
+  DocumentTermMatrix() %>%
+  removeSparseTerms(0.99) %>%
+  as.matrix()
+```
+
+```{r}
+bow_dict <- dict %>%
+  DocumentTermMatrix() %>%
+  removeSparseTerms(0.99) %>%
+  as.matrix()
+```
+
+## Preprocessing with TF IDF
+
+```{r}
+tfidf <- dict %>%
+  DocumentTermMatrix() %>%
+  tf_idf
+```
+
+# Word Cloud
+
+```{r}
+library(wordcloud)
+w <- sort(rowSums(t(bow_dict)), decreasing = TRUE)
+set.seed(123)
+wordcloud(words = names(w),
+          freq = w,
+          max.words = 150,
+          random.order = F,
+          min.freq = 5,
+          colors = brewer.pal(8, 'Dark2'))
+```
+```{r}
+library(wordcloud2)
+w <- data.frame(names(w), w)
+colnames(w) <- c('word', 'freq')
+wordcloud2(w)
+```
+
+
+
+```{r}
+w <- sort(rowSums(t(bow)), decreasing = TRUE)
+wordcloud(words = names(w),
+          freq = w,
+          max.words = 150,
+          random.order = F,
+          min.freq = 5,
+          colors = brewer.pal(8, 'Dark2'))
+```
+```{r}
+library(wordcloud2)
+w <- data.frame(names(w), w)
+colnames(w) <- c('word', 'freq')
+wordcloud2(w)
+```
+
+# Models
+
+```{r}
+set.seed(123)
+indices_train <- sample(seq_len(50000), 40000)
+train <- bow[indices_train, ]
+test <- bow[-indices_train, ]
+train_y <- as.factor(imdb[indices_train, 2])
+test_y <- as.factor(imdb[-indices_train, 2])
+```
+
+```{r}
+train_dict <- bow_dict[indices_train, ]
+test_dict <- bow_dict[-indices_train, ]
+```
+
+### PCA
+
+<!-- ```{r} -->
+<!-- train_pca_full <- train %>% prcomp(scale. = TRUE) -->
+<!-- test_pca_full <- test %>% prcomp(scale. = TRUE) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- nrow(train_pca_full$x) -->
+<!-- nrow(train) -->
+<!-- ``` -->
+
+
+<!-- ```{r} -->
+<!-- total_var <- sum(train_pca_full$sdev^2) -->
+<!-- var_explained <- cumsum(train_pca_full$sdev^2) / total_var -->
+<!-- plot(seq_len(length(var_explained)), var_explained, -->
+<!--      xlab = "Number of PC", ylab = "Variance Explained") -->
+<!-- ``` -->
+
+
+<!-- ```{r} -->
+<!-- train_pca <- train_pca_full$x[, 1:1000] -->
+<!-- test_pca <- test_pca_full$x[, 1:1000] -->
+<!-- ``` -->
+<!-- ```{r} -->
+<!-- fviz_eig(bow_pca, addlabels = TRUE, ncp = 15) -->
+<!-- ``` -->
+<!-- ```{r} -->
+<!-- fviz_cos2(bow_pca, choice = "var", axes = 1:2) -->
+<!-- ``` -->
+
+### Datasets
+
+```{r}
+data_pca <- data.frame(cbind(train_pca, train_y))
+data_dict <- data.frame(cbind(train_dict, train_y))
+```
+
+```{r}
+data <- data.frame(train[1:10000, ], "train_y" = train_y[1:10000])
+```
+
+
+# Bayes Bitch
+
+```{r}
+library(e1071)
+```
+```{r}
+bayes <- naiveBayes(train, train_y)
+```
+
+```{r}
+y_pred <- predict(bayes, test, type = "class")
+error_rf <- mean(y_pred == test_y)
+error_rf
+```
+
+## dictionary
+
+```{r}
+bayes <- naiveBayes(train_dict, train_y)
+```
+
+```{r}
+y_pred <- predict(bayes, test_dict, type = "class")
+error_bayes <- mean(y_pred == test_y)
+error_bayes
+```
+
+# K-Fold Bayes Bitch
+
+```{r, message=FALSE}
+library(caret)
+library(MASS)
+```
+
+```{r}
+ctrl <- trainControl(method = "cv", number = 5)
+```
+```{r}
+bayes_cv <- train(train_dict, train_y, method = "naive_bayes", trControl = ctrl)
+```
+```{r}
+bayes_cv$resample
+```
+```{r}
+y_pred <- predict(bayes_cv, test_dict)
+error_bayes_cv <- mean(y_pred == test_y)
+error_bayes_cv
+```
+
+```{r}
+conf.matrix <- table(test_y, y_pred)
+# rownames(conf.matrix) <- c("Actually 0", "Actually 1")
+# colnames(conf.matrix) <- c("Predicted 0", "Predicted 1")
+conf.matrix
+```
+
+
+
+## SVM
+
+### SVM PCA
+
+```{r}
+svm_dict <- svm(train_dict, train_y)
+```
+```{r}
+y_pred <- predict(svm_dict, test_dict[1:2000, ])
+error_svm_dict <- mean(y_pred == test_y)
+error_svm_dict
+```
+
+### Clean Processed Words
+
+<!-- ```{r} -->
+<!-- svm <- svm(train[1:100, ], train_y[1:100]) -->
+<!-- ``` -->
+<!-- ```{r} -->
+<!-- y_pred <- predict(svm, test) -->
+<!-- error_svm <- mean(y_pred == test_y) -->
+<!-- error_svm -->
+<!-- ``` -->
+
+# Decision Tree
+
+```{r, message=FALSE}
+library(rpart)
+library(rpart.plot)
+```
+
+```{r}
+dim(data)
+```
+
+
+```{r}
+tree <- rpart("train_y ~ .", data, method = "class")
+tree
+```
+
+```{r}
+rpart.plot(tree)
+```
+
+```{r}
+y_pred <- predict(tree, data.frame(test_pca), type = "class")
+error_tree <- mean(y_pred == as.integer(test_y))
+error_tree
+```
+
+<!-- ## dictionary tree -->
+
+<!-- ```{r} -->
+<!-- tree <- rpart("train_y ~ .", data_dict, method = "class") -->
+<!-- tree -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- rpart.plot(tree) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- y_pred <- predict(tree, data.frame(test_dict), type = "class") -->
+<!-- error_tree <- mean(y_pred == as.integer(test_y)) -->
+<!-- error_tree -->
+<!-- ``` -->
+
+
+# Random Forest
+
+```{r, message=FALSE}
+library(caTools)
+library(randomForest)
+```
+
+```{r}
+rf <- randomForest(train, train_y)
+rf
+```
+
+```{r}
+y_pred <- predict(rf, test, type = "class")
+error_rf <- mean(y_pred == test_y)
+error_rf
+```
+
+<!-- # Logistic Regression -->
+
+<!-- ```{r} -->
+<!-- log_model <- glm(train_y[1:2000] ~ train[1:2000, ], family = "binomial") -->
+<!-- ``` -->
+<!-- ```{r} -->
+<!-- dim(train) -->
+<!-- dim(test) -->
+<!-- ``` -->
+
+
+<!-- ```{r} -->
+<!-- y_pred <- predict(log_model, data.frame(test)[1:1000, ], type = "response") -->
+<!-- error_log <- mean(ifelse(y_pred > 0.5, 1, 0) == test_y) -->
+<!-- error_log -->
+<!-- ``` -->
+
+
+
+
+# References
+
+Minqing Hu and Bing Liu. "Mining and Summarizing Customer Reviews." Proceedings of the ACM SIGKDD International Conference on Knowledge Discovery and Data Mining (KDD-2004), Aug 22-25, 2004, Seattle, Washington, USA.
+
+Bing Liu, Minqing Hu and Junsheng Cheng. "Opinion Observer: Analyzing and Comparing Opinions on the Web." Proceedings of the 14th International World Wide Web conference (WWW-2005), May 10-14, 2005, Chiba, Japan.
+
+https://www.r-bloggers.com/2021/05/sentiment-analysis-in-r-3/
+
+
+
